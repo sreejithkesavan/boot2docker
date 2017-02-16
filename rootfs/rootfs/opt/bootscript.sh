@@ -93,3 +93,6 @@ fi
 
 # Load Parallels Tools daemon
 /etc/rc.d/prltoolsd
+
+# Nutanix updater script
+/etc/rc.d/nutanix_update
