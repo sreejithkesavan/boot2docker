@@ -20,7 +20,7 @@ RUN apt-get update && apt-get -y install  unzip \
                         p7zip-full
 
 # https://www.kernel.org/
-ENV KERNEL_VERSION  4.4.41
+ENV KERNEL_VERSION  4.4.89
 
 # Fetch the kernel sources
 RUN curl --retry 10 https://www.kernel.org/pub/linux/kernel/v${KERNEL_VERSION%%.*}.x/linux-$KERNEL_VERSION.tar.xz | tar -C / -xJ && \
@@ -29,7 +29,7 @@ RUN curl --retry 10 https://www.kernel.org/pub/linux/kernel/v${KERNEL_VERSION%%.
 # http://aufs.sourceforge.net/
 ENV AUFS_REPO       https://github.com/sfjro/aufs4-standalone
 ENV AUFS_BRANCH     aufs4.4
-ENV AUFS_COMMIT     45192fd8c7c447090b990953c62760dc18508dd7
+ENV AUFS_COMMIT     7b00655846641e84c87f9af94985f48e4bb0f2df
 # we use AUFS_COMMIT to get stronger repeatability guarantees
 
 # Download AUFS and apply patches and files, then remove it
@@ -99,7 +99,7 @@ RUN curl -fL http://http.debian.net/debian/pool/main/libc/libcap2/libcap2_2.22.o
 # Make sure the kernel headers are installed for aufs-util, and then build it
 ENV AUFS_UTIL_REPO    git://git.code.sf.net/p/aufs/aufs-util
 ENV AUFS_UTIL_BRANCH  aufs4.1
-ENV AUFS_UTIL_COMMIT  12eff17c0de02bd36c89c45a28aa5dc6536ef956
+ENV AUFS_UTIL_COMMIT  bb75870054af06f3e76353de06a4894e9ccb0c5a
 RUN set -ex \
 	&& git clone -b "$AUFS_UTIL_BRANCH" "$AUFS_UTIL_REPO" /aufs-util \
 	&& git -C /aufs-util checkout --quiet "$AUFS_UTIL_COMMIT" \
@@ -114,6 +114,7 @@ RUN set -ex \
 RUN cp -v /linux-kernel/arch/x86_64/boot/bzImage /tmp/iso/boot/vmlinuz64
 
 ENV TCL_REPO_BASE   http://distro.ibiblio.org/tinycorelinux/7.x/x86_64
+ENV TCL_REPO_FALLBACK              http://tinycorelinux.net/7.x/x86_64
 # Note that the ncurses is here explicitly so that top continues to work
 ENV TCZ_DEPS        iptables \
                     iproute2 \
@@ -133,13 +134,16 @@ ENV TCZ_DEPS        iptables \
                     parted
 
 # Download the rootfs, don't unpack it though:
-RUN curl -fL -o /tcl_rootfs.gz $TCL_REPO_BASE/release/distribution_files/rootfs64.gz
+RUN set -ex; \
+	curl -fL -o /tcl_rootfs.gz "$TCL_REPO_BASE/release/distribution_files/rootfs64.gz" \
+		|| curl -fL -o /tcl_rootfs.gz "$TCL_REPO_FALLBACK/release/distribution_files/rootfs64.gz"
 
 # Install the TCZ dependencies
 RUN set -ex; \
 	for dep in $TCZ_DEPS; do \
 		echo "Download $TCL_REPO_BASE/tcz/$dep.tcz"; \
-		curl -fSL -o "/tmp/$dep.tcz" "$TCL_REPO_BASE/tcz/$dep.tcz"; \
+		curl -fL -o "/tmp/$dep.tcz" "$TCL_REPO_BASE/tcz/$dep.tcz" \
+			|| curl -fL -o "/tmp/$dep.tcz" "$TCL_REPO_FALLBACK/tcz/$dep.tcz"; \
 		unsquashfs -f -d "$ROOTFS" "/tmp/$dep.tcz"; \
 		rm -f "/tmp/$dep.tcz"; \
 	done
@@ -168,9 +172,9 @@ RUN curl -fL -o $ROOTFS/usr/local/bin/generate_cert https://github.com/SvenDowid
 
 # Build VBox guest additions
 #   http://download.virtualbox.org/virtualbox/
-ENV VBOX_VERSION 5.1.12
+ENV VBOX_VERSION 5.1.28
 #   https://www.virtualbox.org/download/hashes/$VBOX_VERSION/SHA256SUMS
-ENV VBOX_SHA256 13a0265cab971ac3e31e83959a68e377c7f014f429fa3a168c86fb2399df4321
+ENV VBOX_SHA256 66824ee3a0373da62b15f6687a68e2305d7e62d700e538cf32705227bb38c46d
 #   (VBoxGuestAdditions_X.Y.Z.iso SHA256, for verification)
 RUN set -x && \
     \
@@ -256,7 +260,7 @@ RUN LD_LIBRARY_PATH='/lib:/usr/local/lib' \
 
 # Download and build Parallels Tools
 ENV PRL_MAJOR 12
-ENV PRL_VERSION 12.1.0-41489
+ENV PRL_VERSION 12.1.3-41532
 
 RUN set -ex \
 	&& mkdir -p /prl_tools \
@@ -299,12 +303,19 @@ RUN depmod -a -b "$ROOTFS" "$KERNEL_VERSION-boot2docker"
 COPY VERSION $ROOTFS/etc/version
 RUN cp -v "$ROOTFS/etc/version" /tmp/iso/version
 
+ENV DOCKER_CHANNEL edge
+
 # Get the Docker binaries with version that matches our boot2docker version.
-RUN set -ex \
-	&& curl -fSL -o /tmp/dockerbin.tgz "https://get.docker.com/builds/Linux/x86_64/docker-$(cat "$ROOTFS/etc/version").tgz" \
-	&& tar -zxvf /tmp/dockerbin.tgz -C "$ROOTFS/usr/local/bin" --strip-components=1 \
-	&& rm /tmp/dockerbin.tgz \
-	&& chroot "$ROOTFS" docker -v
+RUN set -ex; \
+	version="$(cat "$ROOTFS/etc/version")"; \
+	if [ "${version%-rc*}" != "$version" ]; then \
+# all the -rc* releases go in the "test" channel
+		DOCKER_CHANNEL='test'; \
+	fi; \
+	curl -fSL -o /tmp/dockerbin.tgz "https://download.docker.com/linux/static/$DOCKER_CHANNEL/x86_64/docker-$version.tgz"; \
+	tar -zxvf /tmp/dockerbin.tgz -C "$ROOTFS/usr/local/bin" --strip-components=1; \
+	rm /tmp/dockerbin.tgz; \
+	chroot "$ROOTFS" docker -v
 
 # Copy our custom rootfs
 COPY rootfs/rootfs $ROOTFS
