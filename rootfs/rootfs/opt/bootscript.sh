@@ -38,7 +38,7 @@ test -f "/var/lib/boot2docker/profile" && . "/var/lib/boot2docker/profile"
 # TODO: move this (and the docker user creation&pwd out to its own over-rideable?))
 if grep -q '^docker:' /etc/passwd; then
     # if we have the docker user, let's add it do the docker group
-    /bin/addgroup docker docker
+    addgroup docker docker
 
     #preload data from boot2docker-cli
     if [ -e "/var/lib/boot2docker/userdata.tar" ]; then
@@ -79,10 +79,6 @@ if [ -e /var/lib/boot2docker/bootlocal.sh ]; then
     /bin/sh /var/lib/boot2docker/bootlocal.sh > /var/log/bootlocal.log 2>&1 &
     echo "------------------- ran /var/lib/boot2docker/bootlocal.sh"
 fi
-
-# Execute automated_script
-# disabled - this script was written assuming bash, which we no longer have.
-#/etc/rc.d/automated_script.sh
 
 # Run Hyper-V KVP Daemon
 if modprobe hv_utils &> /dev/null; then

@@ -1,35 +1,40 @@
-FROM debian:jessie
+FROM debian:stretch-slim
 
-RUN apt-get update && apt-get -y install  unzip \
-                        xz-utils \
-                        curl \
-                        bc \
-                        git \
-                        build-essential \
-                        golang \
-                        cpio \
-                        gcc libc6 libc6-dev \
-                        kmod \
-                        squashfs-tools \
-                        genisoimage \
-                        xorriso \
-                        syslinux \
-                        isolinux \
-                        automake \
-                        pkg-config \
-                        p7zip-full
+RUN set -eux; \
+	apt-get update; \
+	apt-get -y install \
+		automake \
+		bc \
+		build-essential \
+		cpio \
+		curl \
+		gcc libc6 libc6-dev \
+		genisoimage \
+		git \
+		golang \
+		isolinux \
+		kmod \
+		p7zip-full \
+		pkg-config \
+		squashfs-tools \
+		syslinux \
+		unzip \
+		xorriso \
+		xz-utils \
+	; \
+	rm -rf /var/lib/apt/lists/*
 
 # https://www.kernel.org/
-ENV KERNEL_VERSION  4.4.41
+ENV KERNEL_VERSION  4.4.119
 
 # Fetch the kernel sources
-RUN curl --retry 10 https://www.kernel.org/pub/linux/kernel/v${KERNEL_VERSION%%.*}.x/linux-$KERNEL_VERSION.tar.xz | tar -C / -xJ && \
+RUN curl --retry 10 -L https://www.kernel.org/pub/linux/kernel/v${KERNEL_VERSION%%.*}.x/linux-$KERNEL_VERSION.tar.xz | tar -C / -xJ && \
     mv /linux-$KERNEL_VERSION /linux-kernel
 
 # http://aufs.sourceforge.net/
 ENV AUFS_REPO       https://github.com/sfjro/aufs4-standalone
 ENV AUFS_BRANCH     aufs4.4
-ENV AUFS_COMMIT     45192fd8c7c447090b990953c62760dc18508dd7
+ENV AUFS_COMMIT     7b00655846641e84c87f9af94985f48e4bb0f2df
 # we use AUFS_COMMIT to get stronger repeatability guarantees
 
 # Download AUFS and apply patches and files, then remove it
@@ -98,8 +103,8 @@ RUN curl -fL http://http.debian.net/debian/pool/main/libc/libcap2/libcap2_2.22.o
 
 # Make sure the kernel headers are installed for aufs-util, and then build it
 ENV AUFS_UTIL_REPO    git://git.code.sf.net/p/aufs/aufs-util
-ENV AUFS_UTIL_BRANCH  aufs4.1
-ENV AUFS_UTIL_COMMIT  12eff17c0de02bd36c89c45a28aa5dc6536ef956
+ENV AUFS_UTIL_BRANCH  aufs4.4
+ENV AUFS_UTIL_COMMIT  9702d49c9d1b5daac9b21e440c3e2b96d37916d6
 RUN set -ex \
 	&& git clone -b "$AUFS_UTIL_BRANCH" "$AUFS_UTIL_REPO" /aufs-util \
 	&& git -C /aufs-util checkout --quiet "$AUFS_UTIL_COMMIT" \
@@ -113,11 +118,12 @@ RUN set -ex \
 # Prepare the ISO directory with the kernel
 RUN cp -v /linux-kernel/arch/x86_64/boot/bzImage /tmp/iso/boot/vmlinuz64
 
-ENV TCL_REPO_BASE   http://distro.ibiblio.org/tinycorelinux/7.x/x86_64
+ENV TCL_REPO_BASE   http://distro.ibiblio.org/tinycorelinux/8.x/x86_64
+ENV TCL_REPO_FALLBACK              http://tinycorelinux.net/8.x/x86_64
 # Note that the ncurses is here explicitly so that top continues to work
 ENV TCZ_DEPS        iptables \
                     iproute2 \
-                    openssh openssl \
+                    openssh openssl ca-certificates \
                     tar \
                     gcc_libs \
                     ncurses \
@@ -133,13 +139,16 @@ ENV TCZ_DEPS        iptables \
                     parted
 
 # Download the rootfs, don't unpack it though:
-RUN curl -fL -o /tcl_rootfs.gz $TCL_REPO_BASE/release/distribution_files/rootfs64.gz
+RUN set -ex; \
+	curl -fL -o /tcl_rootfs.gz "$TCL_REPO_BASE/release/distribution_files/rootfs64.gz" \
+		|| curl -fL -o /tcl_rootfs.gz "$TCL_REPO_FALLBACK/release/distribution_files/rootfs64.gz"
 
 # Install the TCZ dependencies
 RUN set -ex; \
 	for dep in $TCZ_DEPS; do \
 		echo "Download $TCL_REPO_BASE/tcz/$dep.tcz"; \
-		curl -fSL -o "/tmp/$dep.tcz" "$TCL_REPO_BASE/tcz/$dep.tcz"; \
+		curl -fL -o "/tmp/$dep.tcz" "$TCL_REPO_BASE/tcz/$dep.tcz" \
+			|| curl -fL -o "/tmp/$dep.tcz" "$TCL_REPO_FALLBACK/tcz/$dep.tcz"; \
 		unsquashfs -f -d "$ROOTFS" "/tmp/$dep.tcz"; \
 		rm -f "/tmp/$dep.tcz"; \
 	done
@@ -150,7 +159,11 @@ RUN cd "$ROOTFS" && zcat /tcl_rootfs.gz | cpio -f -i -H newc -d --no-absolute-fi
 # Extract ca-certificates
 RUN set -x \
 #  TCL changed something such that these need to be extracted post-install
-	&& chroot "$ROOTFS" sh -xc 'ldconfig && /usr/local/tce.installed/openssl' \
+	&& chroot "$ROOTFS" sh -xc ' \
+		ldconfig \
+		&& /usr/local/tce.installed/openssl \
+		&& /usr/local/tce.installed/ca-certificates \
+	' \
 #  Docker looks for them in /etc/ssl
 	&& ln -sT ../usr/local/etc/ssl "$ROOTFS/etc/ssl" \
 #  a little testing is always prudent
@@ -168,9 +181,9 @@ RUN curl -fL -o $ROOTFS/usr/local/bin/generate_cert https://github.com/SvenDowid
 
 # Build VBox guest additions
 #   http://download.virtualbox.org/virtualbox/
-ENV VBOX_VERSION 5.1.12
+ENV VBOX_VERSION 5.2.2
 #   https://www.virtualbox.org/download/hashes/$VBOX_VERSION/SHA256SUMS
-ENV VBOX_SHA256 13a0265cab971ac3e31e83959a68e377c7f014f429fa3a168c86fb2399df4321
+ENV VBOX_SHA256 8317a0479a94877829b20a19df8a7c09187b31eecb3f1ed9d2b8cb8681a81bb8
 #   (VBoxGuestAdditions_X.Y.Z.iso SHA256, for verification)
 RUN set -x && \
     \
@@ -186,11 +199,14 @@ RUN set -x && \
     mkdir amd64 && tar -C amd64 -xjf VBoxGuestAdditions-amd64.tar.bz2 && \
     rm VBoxGuestAdditions*.tar.bz2 && \
     \
-    KERN_DIR=/linux-kernel/ make -C amd64/src/vboxguest-${VBOX_VERSION} && \
+    make -C amd64/src/vboxguest-${VBOX_VERSION} \
+        KERN_DIR=/linux-kernel \
+        KERN_VER="$KERNEL_VERSION" \
+    && \
     cp amd64/src/vboxguest-${VBOX_VERSION}/*.ko $ROOTFS/lib/modules/$KERNEL_VERSION-boot2docker/ && \
     \
     mkdir -p $ROOTFS/sbin && \
-    cp amd64/lib/VBoxGuestAdditions/mount.vboxsf amd64/sbin/VBoxService $ROOTFS/sbin/ && \
+    cp amd64/other/mount.vboxsf amd64/sbin/VBoxService $ROOTFS/sbin/ && \
     mkdir -p $ROOTFS/bin && \
     cp amd64/bin/VBoxClient amd64/bin/VBoxControl $ROOTFS/bin/
 
@@ -256,7 +272,7 @@ RUN LD_LIBRARY_PATH='/lib:/usr/local/lib' \
 
 # Download and build Parallels Tools
 ENV PRL_MAJOR 12
-ENV PRL_VERSION 12.1.0-41489
+ENV PRL_VERSION 12.1.3-41532
 
 RUN set -ex \
 	&& mkdir -p /prl_tools \
@@ -265,6 +281,11 @@ RUN set -ex \
 	&& cd /prl_tools \
 	&& cp -Rv tools/* $ROOTFS \
 	\
+	# Kludge to fix fsync on directory in prl_fs:
+	#   https://github.com/Parallels/docker-machine-parallels/issues/71
+	# Should be removed when fixed in official Parallels Tools.
+	&& sed -E -i 's/(^\t.llseek\t\t= generic_file_llseek,$)/\1\n\t.fsync = noop_fsync,/' \
+		kmods/prl_fs/SharedFolders/Guest/Linux/prl_fs/file.c \
 	&& KERNEL_DIR=/linux-kernel/ KVER="$KERNEL_VERSION" SRC=/linux-kernel/ PRL_FREEZE_SKIP=1 \
 		make -C kmods/ -f Makefile.kmods installme \
 	\
@@ -299,12 +320,19 @@ RUN depmod -a -b "$ROOTFS" "$KERNEL_VERSION-boot2docker"
 COPY VERSION $ROOTFS/etc/version
 RUN cp -v "$ROOTFS/etc/version" /tmp/iso/version
 
+ENV DOCKER_CHANNEL edge
+
 # Get the Docker binaries with version that matches our boot2docker version.
-RUN set -ex \
-	&& curl -fSL -o /tmp/dockerbin.tgz "https://get.docker.com/builds/Linux/x86_64/docker-$(cat "$ROOTFS/etc/version").tgz" \
-	&& tar -zxvf /tmp/dockerbin.tgz -C "$ROOTFS/usr/local/bin" --strip-components=1 \
-	&& rm /tmp/dockerbin.tgz \
-	&& chroot "$ROOTFS" docker -v
+RUN set -ex; \
+	version="$(cat "$ROOTFS/etc/version")"; \
+	if [ "${version%-rc*}" != "$version" ]; then \
+# all the -rc* releases go in the "test" channel
+		DOCKER_CHANNEL='test'; \
+	fi; \
+	curl -fSL -o /tmp/dockerbin.tgz "https://download.docker.com/linux/static/$DOCKER_CHANNEL/x86_64/docker-$version.tgz"; \
+	tar -zxvf /tmp/dockerbin.tgz -C "$ROOTFS/usr/local/bin" --strip-components=1; \
+	rm /tmp/dockerbin.tgz; \
+	chroot "$ROOTFS" docker -v
 
 # Copy our custom rootfs
 COPY rootfs/rootfs $ROOTFS
@@ -355,6 +383,9 @@ RUN set -ex \
 	&& DATE="$(date)" \
 	&& echo "${GIT_BRANCH} : ${GITSHA1} - ${DATE}" \
 		| tee "$ROOTFS/etc/boot2docker"
+ENV COMPOSE_VERSION 1.20.1
+RUN curl -L https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-`uname -s`-`uname -m` -o "$ROOTFS/usr/local/bin"/docker-compose && \
+    chmod +x "$ROOTFS/usr/local/bin"/docker-compose
 
 # Copy boot params
 COPY rootfs/isolinux /tmp/iso/boot/isolinux
